@@ -808,7 +808,7 @@ export class ChannelStartupService {
           windowStart: contact.windowStart,
           windowExpires: contact.windowExpires,
           windowActive: contact.windowActive,
-          lastMessage: lastMessage ? this.cleanMessageData(lastMessage) : undefined,
+          // lastMessage: lastMessage ? this.cleanMessageData(lastMessage) : undefined,
           unreadCount: contact.unreadMessages,
           isSaved: !!contact.contactId,
         };
