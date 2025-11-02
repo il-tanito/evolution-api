@@ -709,8 +709,15 @@ export class ChannelStartupService {
 
   public async fetchChats(query: any) {
     try {
+      // 📄 PAGINACIÓN
+      const page = Number(query?.page ?? 1);
+      const take = Number(query?.take ?? 50); // cantidad por página (por defecto 50)
+      const skip = (page - 1) * take;
+
       const remoteJid = query?.where?.remoteJid
-        ? (query?.where?.remoteJid.includes('@') ? query.where?.remoteJid : createJid(query.where?.remoteJid))
+        ? (query?.where?.remoteJid.includes('@')
+          ? query.where?.remoteJid
+          : createJid(query.where?.remoteJid))
         : null;
 
       const where = { instanceId: this.instanceId };
@@ -719,12 +726,17 @@ export class ChannelStartupService {
       const timestampFilter =
         query?.where?.messageTimestamp?.gte && query?.where?.messageTimestamp?.lte
           ? Prisma.sql`
-            AND "Message"."messageTimestamp" >= ${Math.floor(new Date(query.where.messageTimestamp.gte).getTime() / 1000)}
-            AND "Message"."messageTimestamp" <= ${Math.floor(new Date(query.where.messageTimestamp.lte).getTime() / 1000)}`
+            AND "Message"."messageTimestamp" >= ${Math.floor(
+            new Date(query.where.messageTimestamp.gte).getTime() / 1000,
+          )}
+            AND "Message"."messageTimestamp" <= ${Math.floor(
+            new Date(query.where.messageTimestamp.lte).getTime() / 1000,
+          )}`
           : Prisma.sql``;
 
-      const limit = query?.take ? Prisma.sql`LIMIT ${query.take}` : Prisma.sql``;
-      const offset = query?.skip ? Prisma.sql`OFFSET ${query.skip}` : Prisma.sql``;
+      // aplicar paginación
+      const limit = Prisma.sql`LIMIT ${take}`;
+      const offset = Prisma.sql`OFFSET ${skip}`;
 
       const results = await this.prismaRepository.$queryRaw`
       WITH rankedMessages AS (
@@ -732,15 +744,20 @@ export class ChannelStartupService {
           "Contact"."id" as "contactId",
           "Message"."key"->>'remoteJid' as "remoteJid",
           CASE 
-            WHEN "Message"."key"->>'remoteJid' LIKE '%@g.us' THEN COALESCE("Chat"."name", "Contact"."pushName")
+            WHEN "Message"."key"->>'remoteJid' LIKE '%@g.us'
+              THEN COALESCE("Chat"."name", "Contact"."pushName")
             ELSE COALESCE("Contact"."pushName", "Message"."pushName")
           END as "pushName",
           "Contact"."profilePicUrl",
-          COALESCE(to_timestamp("Message"."messageTimestamp"::double precision), "Contact"."updatedAt") as "updatedAt",
+          COALESCE(
+            to_timestamp("Message"."messageTimestamp"::double precision),
+            "Contact"."updatedAt"
+          ) as "updatedAt",
           "Chat"."createdAt" as "windowStart",
           "Chat"."createdAt" + INTERVAL '24 hours' as "windowExpires",
           "Chat"."unreadMessages" as "unreadMessages",
-          CASE WHEN "Chat"."createdAt" + INTERVAL '24 hours' > NOW() THEN true ELSE false END as "windowActive",
+          CASE WHEN "Chat"."createdAt" + INTERVAL '24 hours' > NOW()
+            THEN true ELSE false END as "windowActive",
           "Message"."id" AS "lastMessageId",
           "Message"."key" AS "lastMessage_key",
           CASE
@@ -749,17 +766,19 @@ export class ChannelStartupService {
           END AS "lastMessagePushName",
           "Message"."participant" AS "lastMessageParticipant",
           "Message"."messageType" AS "lastMessageMessageType",
-          "Message"."message" AS "lastMessageMessage",
-          "Message"."contextInfo" AS "lastMessageContextInfo",
+          COALESCE("Message"."message", '{}'::jsonb) AS "lastMessageMessage", -- 💡 evita null
+          COALESCE("Message"."contextInfo", '{}'::jsonb) AS "lastMessageContextInfo",
           "Message"."source" AS "lastMessageSource",
           "Message"."messageTimestamp" AS "lastMessageMessageTimestamp",
           "Message"."instanceId" AS "lastMessageInstanceId",
           "Message"."sessionId" AS "lastMessageSessionId",
           "Message"."status" AS "lastMessageStatus"
         FROM "Message"
-        LEFT JOIN "Contact" ON "Contact"."remoteJid" = "Message"."key"->>'remoteJid'
+        LEFT JOIN "Contact"
+          ON "Contact"."remoteJid" = "Message"."key"->>'remoteJid'
           AND "Contact"."instanceId" = "Message"."instanceId"
-        LEFT JOIN "Chat" ON "Chat"."remoteJid" = "Message"."key"->>'remoteJid'
+        LEFT JOIN "Chat"
+          ON "Chat"."remoteJid" = "Message"."key"->>'remoteJid'
           AND "Chat"."instanceId" = "Message"."instanceId"
         WHERE "Message"."instanceId" = ${this.instanceId}
         ${remoteJid ? Prisma.sql`AND "Message"."key"->>'remoteJid' = ${remoteJid}` : Prisma.sql``}
@@ -772,6 +791,7 @@ export class ChannelStartupService {
       ${offset};
     `;
 
+      // Si hay resultados, mapearlos
       if (results && isArray(results) && results.length > 0) {
         const mappedResults = results.map((contact) => {
           try {
@@ -782,7 +802,7 @@ export class ChannelStartupService {
                 pushName: contact.lastMessagePushName,
                 participant: contact.lastMessageParticipant,
                 messageType: contact.lastMessageMessageType,
-                message: contact.lastMessageMessage, // puede ser null
+                message: contact.lastMessageMessage, // puede ser {}
                 contextInfo: contact.lastMessageContextInfo,
                 source: contact.lastMessageSource,
                 messageTimestamp: contact.lastMessageMessageTimestamp,
@@ -793,14 +813,11 @@ export class ChannelStartupService {
               : undefined;
 
             let safeLastMessage: any = undefined;
-
             if (lastMessageRaw) {
-              // normalizar antes de limpiar
               if (lastMessageRaw.message == null) lastMessageRaw.message = {};
               try {
                 safeLastMessage = this.cleanMessageData(lastMessageRaw);
               } catch {
-                // última defensa: no romper por un chat “raro”
                 safeLastMessage = {
                   ...lastMessageRaw,
                   message: {},
@@ -820,12 +837,11 @@ export class ChannelStartupService {
               windowStart: contact.windowStart,
               windowExpires: contact.windowExpires,
               windowActive: contact.windowActive,
-              lastMessage: safeLastMessage,
+              // lastMessage: safeLastMessage,
               unreadCount: contact.unreadMessages,
               isSaved: !!contact.contactId,
             };
-          } catch (innerErr) {
-            // si falló un chat individual, no tirar toda la respuesta
+          } catch {
             return {
               id: contact.contactId || null,
               remoteJid: contact.remoteJid,
@@ -835,23 +851,30 @@ export class ChannelStartupService {
               windowStart: contact.windowStart,
               windowExpires: contact.windowExpires,
               windowActive: contact.windowActive,
-              lastMessage: undefined,
+              // lastMessage: undefined,
               unreadCount: contact.unreadMessages,
               isSaved: !!contact.contactId,
             };
           }
         });
 
-        return mappedResults;
+        // 💬 Devolvemos metadata de paginación
+        return {
+          ok: true,
+          page,
+          take,
+          count: mappedResults.length,
+          records: mappedResults,
+        };
       }
 
-      return [];
+      return { ok: true, page, take, count: 0, records: [] };
     } catch (err) {
-      // Nunca 500 por acá: devolvemos [] y vemos el log en EasyPanel.
       // console.error('❌ Error en fetchChats:', err);
-      return [];
+      return { ok: false, error: 'fetchChats_failed' };
     }
   }
+
 
 
   public hasValidMediaContent(message: any): boolean {
