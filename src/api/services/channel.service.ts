@@ -837,7 +837,7 @@ export class ChannelStartupService {
               windowStart: contact.windowStart,
               windowExpires: contact.windowExpires,
               windowActive: contact.windowActive,
-              // lastMessage: safeLastMessage,
+              lastMessage: safeLastMessage,
               unreadCount: contact.unreadMessages,
               isSaved: !!contact.contactId,
             };
@@ -851,7 +851,7 @@ export class ChannelStartupService {
               windowStart: contact.windowStart,
               windowExpires: contact.windowExpires,
               windowActive: contact.windowActive,
-              // lastMessage: undefined,
+              lastMessage: undefined,
               unreadCount: contact.unreadMessages,
               isSaved: !!contact.contactId,
             };
