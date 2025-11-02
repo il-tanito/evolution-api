@@ -796,18 +796,18 @@ export class ChannelStartupService {
           try {
             const lastMessageRaw = contact.lastMessageId
               ? {
-                id: contact.lastMessageId,
-                key: contact.lastMessage_key,
-                pushName: contact.lastMessagePushName,
-                participant: contact.lastMessageParticipant,
-                messageType: contact.lastMessageMessageType,
-                message: contact.lastMessageMessage,
-                contextInfo: contact.lastMessageContextInfo,
-                source: contact.lastMessageSource,
+                //id: contact.lastMessageId,
+                //key: contact.lastMessage_key,
+                //pushName: contact.lastMessagePushName,
+                //participant: contact.lastMessageParticipant,
+                //messageType: contact.lastMessageMessageType,
+                //message: contact.lastMessageMessage,
+                //contextInfo: contact.lastMessageContextInfo,
+                //source: contact.lastMessageSource,
                 messageTimestamp: contact.lastMessageMessageTimestamp,
-                instanceId: contact.lastMessageInstanceId,
-                sessionId: contact.lastMessageSessionId,
-                status: contact.lastMessageStatus,
+                //instanceId: contact.lastMessageInstanceId,
+                //sessionId: contact.lastMessageSessionId,
+                //status: contact.lastMessageStatus,
               }
               : undefined;
 
