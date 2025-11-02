@@ -709,34 +709,31 @@ export class ChannelStartupService {
 
   public async fetchChats(query: any) {
     try {
-      // 📄 Paginación segura para POST
-      const page = Number(query?.page ?? 1);
-      const take = Number(query?.take ?? 50);
-      const skip = (page - 1) * take;
+      // 🔧 Paginación opcional: solo si page y take están presentes
+      const hasPage = query?.page !== undefined && query?.page !== null && query?.page !== '';
+      const hasTake = query?.take !== undefined && query?.take !== null && query?.take !== '';
+
+      let limit = Prisma.sql``;
+      let offset = Prisma.sql``;
+
+      if (hasPage && hasTake) {
+        const page = Math.max(1, Number(query.page) || 1);
+        const take = Math.max(1, Number(query.take) || 50);
+        const skip = (page - 1) * take;
+        limit = Prisma.sql`LIMIT ${take}`;
+        offset = Prisma.sql`OFFSET ${skip}`;
+      }
 
       const remoteJid = query?.where?.remoteJid
-        ? (query?.where?.remoteJid.includes('@')
-          ? query.where?.remoteJid
-          : createJid(query.where?.remoteJid))
+        ? (query?.where?.remoteJid.includes('@') ? query.where?.remoteJid : createJid(query.where?.remoteJid))
         : null;
-
-      const where = { instanceId: this.instanceId };
-      if (remoteJid) where['remoteJid'] = remoteJid;
 
       const timestampFilter =
         query?.where?.messageTimestamp?.gte && query?.where?.messageTimestamp?.lte
           ? Prisma.sql`
-            AND "Message"."messageTimestamp" >= ${Math.floor(
-            new Date(query.where.messageTimestamp.gte).getTime() / 1000,
-          )}
-            AND "Message"."messageTimestamp" <= ${Math.floor(
-            new Date(query.where.messageTimestamp.lte).getTime() / 1000,
-          )}`
+            AND "Message"."messageTimestamp" >= ${Math.floor(new Date(query.where.messageTimestamp.gte).getTime() / 1000)}
+            AND "Message"."messageTimestamp" <= ${Math.floor(new Date(query.where.messageTimestamp.lte).getTime() / 1000)}`
           : Prisma.sql``;
-
-      // Usar LIMIT/OFFSET según la página
-      const limit = Prisma.sql`LIMIT ${take}`;
-      const offset = Prisma.sql`OFFSET ${skip}`;
 
       const results = await this.prismaRepository.$queryRaw`
       WITH rankedMessages AS (
@@ -749,10 +746,7 @@ export class ChannelStartupService {
             ELSE COALESCE("Contact"."pushName", "Message"."pushName")
           END as "pushName",
           "Contact"."profilePicUrl",
-          COALESCE(
-            to_timestamp("Message"."messageTimestamp"::double precision),
-            "Contact"."updatedAt"
-          ) as "updatedAt",
+          COALESCE(to_timestamp("Message"."messageTimestamp"::double precision), "Contact"."updatedAt") as "updatedAt",
           "Chat"."createdAt" as "windowStart",
           "Chat"."createdAt" + INTERVAL '24 hours' as "windowExpires",
           "Chat"."unreadMessages" as "unreadMessages",
@@ -793,80 +787,32 @@ export class ChannelStartupService {
 
       if (results && isArray(results) && results.length > 0) {
         return results.map((contact) => {
-          try {
-            const lastMessageRaw = contact.lastMessageId
-              ? {
-                //id: contact.lastMessageId,
-                //key: contact.lastMessage_key,
-                //pushName: contact.lastMessagePushName,
-                //participant: contact.lastMessageParticipant,
-                //messageType: contact.lastMessageMessageType,
-                //message: contact.lastMessageMessage,
-                //contextInfo: contact.lastMessageContextInfo,
-                //source: contact.lastMessageSource,
-                messageTimestamp: contact.lastMessageMessageTimestamp,
-                //instanceId: contact.lastMessageInstanceId,
-                //sessionId: contact.lastMessageSessionId,
-                //status: contact.lastMessageStatus,
-              }
-              : undefined;
+          // lastMessage SOLO con messageTimestamp
+          const lastMessage = contact.lastMessageId
+            ? { messageTimestamp: contact.lastMessageMessageTimestamp }
+            : undefined;
 
-            let safeLastMessage: any = undefined;
-
-            if (lastMessageRaw) {
-              if (lastMessageRaw.message == null) lastMessageRaw.message = {};
-              try {
-                safeLastMessage = this.cleanMessageData(lastMessageRaw);
-              } catch {
-                safeLastMessage = {
-                  ...lastMessageRaw,
-                  message: {},
-                  text: '',
-                  type: 'text',
-                  mediaUrl: undefined,
-                };
-              }
-            }
-
-            return {
-              id: contact.contactId || null,
-              remoteJid: contact.remoteJid,
-              pushName: contact.pushName,
-              profilePicUrl: contact.profilePicUrl,
-              updatedAt: contact.updatedAt,
-              windowStart: contact.windowStart,
-              windowExpires: contact.windowExpires,
-              windowActive: contact.windowActive,
-              lastMessage: safeLastMessage,
-              unreadCount: contact.unreadMessages,
-              isSaved: !!contact.contactId,
-            };
-          } catch {
-            return {
-              id: contact.contactId || null,
-              remoteJid: contact.remoteJid,
-              pushName: contact.pushName,
-              profilePicUrl: contact.profilePicUrl,
-              updatedAt: contact.updatedAt,
-              windowStart: contact.windowStart,
-              windowExpires: contact.windowExpires,
-              windowActive: contact.windowActive,
-              lastMessage: undefined,
-              unreadCount: contact.unreadMessages,
-              isSaved: !!contact.contactId,
-            };
-          }
+          return {
+            id: contact.contactId || null,
+            remoteJid: contact.remoteJid,
+            pushName: contact.pushName,
+            profilePicUrl: contact.profilePicUrl,
+            updatedAt: contact.updatedAt,
+            windowStart: contact.windowStart,
+            windowExpires: contact.windowExpires,
+            windowActive: contact.windowActive,
+            lastMessage,
+            unreadCount: contact.unreadMessages,
+            isSaved: !!contact.contactId,
+          };
         });
       }
 
       return [];
-    } catch (err) {
-      // console.error('❌ Error en fetchChats:', err);
+    } catch (_err) {
       return [];
     }
   }
-
-
 
 
   public hasValidMediaContent(message: any): boolean {
