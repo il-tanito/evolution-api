@@ -709,9 +709,9 @@ export class ChannelStartupService {
 
   public async fetchChats(query: any) {
     try {
-      // 📄 PAGINACIÓN
+      // 📄 Paginación segura para POST
       const page = Number(query?.page ?? 1);
-      const take = Number(query?.take ?? 50); // cantidad por página (por defecto 50)
+      const take = Number(query?.take ?? 50);
       const skip = (page - 1) * take;
 
       const remoteJid = query?.where?.remoteJid
@@ -734,7 +734,7 @@ export class ChannelStartupService {
           )}`
           : Prisma.sql``;
 
-      // aplicar paginación
+      // Usar LIMIT/OFFSET según la página
       const limit = Prisma.sql`LIMIT ${take}`;
       const offset = Prisma.sql`OFFSET ${skip}`;
 
@@ -766,7 +766,7 @@ export class ChannelStartupService {
           END AS "lastMessagePushName",
           "Message"."participant" AS "lastMessageParticipant",
           "Message"."messageType" AS "lastMessageMessageType",
-          COALESCE("Message"."message", '{}'::jsonb) AS "lastMessageMessage", -- 💡 evita null
+          COALESCE("Message"."message", '{}'::jsonb) AS "lastMessageMessage",
           COALESCE("Message"."contextInfo", '{}'::jsonb) AS "lastMessageContextInfo",
           "Message"."source" AS "lastMessageSource",
           "Message"."messageTimestamp" AS "lastMessageMessageTimestamp",
@@ -791,9 +791,8 @@ export class ChannelStartupService {
       ${offset};
     `;
 
-      // Si hay resultados, mapearlos
       if (results && isArray(results) && results.length > 0) {
-        const mappedResults = results.map((contact) => {
+        return results.map((contact) => {
           try {
             const lastMessageRaw = contact.lastMessageId
               ? {
@@ -802,7 +801,7 @@ export class ChannelStartupService {
                 pushName: contact.lastMessagePushName,
                 participant: contact.lastMessageParticipant,
                 messageType: contact.lastMessageMessageType,
-                message: contact.lastMessageMessage, // puede ser {}
+                message: contact.lastMessageMessage,
                 contextInfo: contact.lastMessageContextInfo,
                 source: contact.lastMessageSource,
                 messageTimestamp: contact.lastMessageMessageTimestamp,
@@ -813,6 +812,7 @@ export class ChannelStartupService {
               : undefined;
 
             let safeLastMessage: any = undefined;
+
             if (lastMessageRaw) {
               if (lastMessageRaw.message == null) lastMessageRaw.message = {};
               try {
@@ -857,23 +857,15 @@ export class ChannelStartupService {
             };
           }
         });
-
-        // 💬 Devolvemos metadata de paginación
-        return {
-          ok: true,
-          page,
-          take,
-          count: mappedResults.length,
-          records: mappedResults,
-        };
       }
 
-      return { ok: true, page, take, count: 0, records: [] };
+      return [];
     } catch (err) {
       // console.error('❌ Error en fetchChats:', err);
-      return { ok: false, error: 'fetchChats_failed' };
+      return [];
     }
   }
+
 
 
 
