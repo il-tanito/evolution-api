@@ -27,7 +27,7 @@ export class ChannelStartupService {
     public readonly eventEmitter: EventEmitter2,
     public readonly prismaRepository: PrismaRepository,
     public readonly chatwootCache: CacheService,
-  ) {}
+  ) { }
 
   public readonly logger = new Logger('ChannelStartupService');
 
@@ -708,31 +708,25 @@ export class ChannelStartupService {
   }
 
   public async fetchChats(query: any) {
-    const remoteJid = query?.where?.remoteJid
-      ? query?.where?.remoteJid.includes('@')
-        ? query.where?.remoteJid
-        : createJid(query.where?.remoteJid)
-      : null;
+    try {
+      const remoteJid = query?.where?.remoteJid
+        ? (query?.where?.remoteJid.includes('@') ? query.where?.remoteJid : createJid(query.where?.remoteJid))
+        : null;
 
-    const where = {
-      instanceId: this.instanceId,
-    };
+      const where = { instanceId: this.instanceId };
+      if (remoteJid) where['remoteJid'] = remoteJid;
 
-    if (remoteJid) {
-      where['remoteJid'] = remoteJid;
-    }
+      const timestampFilter =
+        query?.where?.messageTimestamp?.gte && query?.where?.messageTimestamp?.lte
+          ? Prisma.sql`
+            AND "Message"."messageTimestamp" >= ${Math.floor(new Date(query.where.messageTimestamp.gte).getTime() / 1000)}
+            AND "Message"."messageTimestamp" <= ${Math.floor(new Date(query.where.messageTimestamp.lte).getTime() / 1000)}`
+          : Prisma.sql``;
 
-    const timestampFilter =
-      query?.where?.messageTimestamp?.gte && query?.where?.messageTimestamp?.lte
-        ? Prisma.sql`
-        AND "Message"."messageTimestamp" >= ${Math.floor(new Date(query.where.messageTimestamp.gte).getTime() / 1000)}
-        AND "Message"."messageTimestamp" <= ${Math.floor(new Date(query.where.messageTimestamp.lte).getTime() / 1000)}`
-        : Prisma.sql``;
+      const limit = query?.take ? Prisma.sql`LIMIT ${query.take}` : Prisma.sql``;
+      const offset = query?.skip ? Prisma.sql`OFFSET ${query.skip}` : Prisma.sql``;
 
-    const limit = query?.take ? Prisma.sql`LIMIT ${query.take}` : Prisma.sql``;
-    const offset = query?.skip ? Prisma.sql`OFFSET ${query.skip}` : Prisma.sql``;
-
-    const results = await this.prismaRepository.$queryRaw`
+      const results = await this.prismaRepository.$queryRaw`
       WITH rankedMessages AS (
         SELECT DISTINCT ON ("Message"."key"->>'remoteJid') 
           "Contact"."id" as "contactId",
@@ -742,11 +736,7 @@ export class ChannelStartupService {
             ELSE COALESCE("Contact"."pushName", "Message"."pushName")
           END as "pushName",
           "Contact"."profilePicUrl",
-          COALESCE(
-            to_timestamp("Message"."messageTimestamp"::double precision), 
-            "Contact"."updatedAt"
-          ) as "updatedAt",
-          "Chat"."name" as "pushName",
+          COALESCE(to_timestamp("Message"."messageTimestamp"::double precision), "Contact"."updatedAt") as "updatedAt",
           "Chat"."createdAt" as "windowStart",
           "Chat"."createdAt" + INTERVAL '24 hours' as "windowExpires",
           "Chat"."unreadMessages" as "unreadMessages",
@@ -767,8 +757,10 @@ export class ChannelStartupService {
           "Message"."sessionId" AS "lastMessageSessionId",
           "Message"."status" AS "lastMessageStatus"
         FROM "Message"
-        LEFT JOIN "Contact" ON "Contact"."remoteJid" = "Message"."key"->>'remoteJid' AND "Contact"."instanceId" = "Message"."instanceId"
-        LEFT JOIN "Chat" ON "Chat"."remoteJid" = "Message"."key"->>'remoteJid' AND "Chat"."instanceId" = "Message"."instanceId"
+        LEFT JOIN "Contact" ON "Contact"."remoteJid" = "Message"."key"->>'remoteJid'
+          AND "Contact"."instanceId" = "Message"."instanceId"
+        LEFT JOIN "Chat" ON "Chat"."remoteJid" = "Message"."key"->>'remoteJid'
+          AND "Chat"."instanceId" = "Message"."instanceId"
         WHERE "Message"."instanceId" = ${this.instanceId}
         ${remoteJid ? Prisma.sql`AND "Message"."key"->>'remoteJid' = ${remoteJid}` : Prisma.sql``}
         ${timestampFilter}
@@ -780,45 +772,87 @@ export class ChannelStartupService {
       ${offset};
     `;
 
-    if (results && isArray(results) && results.length > 0) {
-      const mappedResults = results.map((contact) => {
-        const lastMessage = contact.lastMessageId
-          ? {
-              id: contact.lastMessageId,
-              key: contact.lastMessage_key,
-              pushName: contact.lastMessagePushName,
-              participant: contact.lastMessageParticipant,
-              messageType: contact.lastMessageMessageType,
-              message: contact.lastMessageMessage,
-              contextInfo: contact.lastMessageContextInfo,
-              source: contact.lastMessageSource,
-              messageTimestamp: contact.lastMessageMessageTimestamp,
-              instanceId: contact.lastMessageInstanceId,
-              sessionId: contact.lastMessageSessionId,
-              status: contact.lastMessageStatus,
+      if (results && isArray(results) && results.length > 0) {
+        const mappedResults = results.map((contact) => {
+          try {
+            const lastMessageRaw = contact.lastMessageId
+              ? {
+                id: contact.lastMessageId,
+                key: contact.lastMessage_key,
+                pushName: contact.lastMessagePushName,
+                participant: contact.lastMessageParticipant,
+                messageType: contact.lastMessageMessageType,
+                message: contact.lastMessageMessage, // puede ser null
+                contextInfo: contact.lastMessageContextInfo,
+                source: contact.lastMessageSource,
+                messageTimestamp: contact.lastMessageMessageTimestamp,
+                instanceId: contact.lastMessageInstanceId,
+                sessionId: contact.lastMessageSessionId,
+                status: contact.lastMessageStatus,
+              }
+              : undefined;
+
+            let safeLastMessage: any = undefined;
+
+            if (lastMessageRaw) {
+              // normalizar antes de limpiar
+              if (lastMessageRaw.message == null) lastMessageRaw.message = {};
+              try {
+                safeLastMessage = this.cleanMessageData(lastMessageRaw);
+              } catch {
+                // última defensa: no romper por un chat “raro”
+                safeLastMessage = {
+                  ...lastMessageRaw,
+                  message: {},
+                  text: '',
+                  type: 'text',
+                  mediaUrl: undefined,
+                };
+              }
             }
-          : undefined;
 
-        return {
-          id: contact.contactId || null,
-          remoteJid: contact.remoteJid,
-          pushName: contact.pushName,
-          profilePicUrl: contact.profilePicUrl,
-          updatedAt: contact.updatedAt,
-          windowStart: contact.windowStart,
-          windowExpires: contact.windowExpires,
-          windowActive: contact.windowActive,
-          // lastMessage: lastMessage ? this.cleanMessageData(lastMessage) : undefined,
-          unreadCount: contact.unreadMessages,
-          isSaved: !!contact.contactId,
-        };
-      });
+            return {
+              id: contact.contactId || null,
+              remoteJid: contact.remoteJid,
+              pushName: contact.pushName,
+              profilePicUrl: contact.profilePicUrl,
+              updatedAt: contact.updatedAt,
+              windowStart: contact.windowStart,
+              windowExpires: contact.windowExpires,
+              windowActive: contact.windowActive,
+              lastMessage: safeLastMessage,
+              unreadCount: contact.unreadMessages,
+              isSaved: !!contact.contactId,
+            };
+          } catch (innerErr) {
+            // si falló un chat individual, no tirar toda la respuesta
+            return {
+              id: contact.contactId || null,
+              remoteJid: contact.remoteJid,
+              pushName: contact.pushName,
+              profilePicUrl: contact.profilePicUrl,
+              updatedAt: contact.updatedAt,
+              windowStart: contact.windowStart,
+              windowExpires: contact.windowExpires,
+              windowActive: contact.windowActive,
+              lastMessage: undefined,
+              unreadCount: contact.unreadMessages,
+              isSaved: !!contact.contactId,
+            };
+          }
+        });
 
-      return mappedResults;
+        return mappedResults;
+      }
+
+      return [];
+    } catch (err) {
+      // Nunca 500 por acá: devolvemos [] y vemos el log en EasyPanel.
+      // console.error('❌ Error en fetchChats:', err);
+      return [];
     }
-
-    return [];
   }
+
 
   public hasValidMediaContent(message: any): boolean {
     if (!message?.message) return false;
